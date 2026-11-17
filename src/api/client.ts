@@ -16,6 +16,7 @@
 
 import { RESOURCE } from '../auth/protocol.ts'
 import { createSseDecoder, decodeEvent, isPlanUsageCode, type ResponsesEvent } from './events.ts'
+import type { ToolNameTable } from '../convert/names.ts'
 import { toResponsesBody, type NeutralRequest, type ResponsesBody } from '../convert/request.ts'
 import type { ListedModel } from '../models/describe.ts'
 import { abortable, assertNotAborted } from '../abort.ts'
@@ -164,6 +165,8 @@ export async function listModels(
 export interface StreamTurnOptions {
   accessToken: string
   request: NeutralRequest
+  /** Wire-name map shared with the caller, so streamed calls resolve back. */
+  names?: ToolNameTable
   endpoints?: ClientEndpoints
   signal?: AbortSignal
 }
@@ -181,7 +184,8 @@ export interface StreamTurnOptions {
  */
 export async function* streamTurn(options: StreamTurnOptions): AsyncGenerator<ResponsesEvent, void, undefined> {
   assertNotAborted(options.signal)
-  const body: ResponsesBody = toResponsesBody(options.request)
+  const body: ResponsesBody = options.names === undefined
+    ? toResponsesBody(options.request) : toResponsesBody(options.request, options.names)
   const response = await (options.endpoints?.fetch ?? fetch)(`${baseOf(options.endpoints)}/responses`, {
     method: 'POST',
     headers: headersFor(options.accessToken, body.prompt_cache_key),
