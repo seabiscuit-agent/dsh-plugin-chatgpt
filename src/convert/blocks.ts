@@ -1,5 +1,6 @@
 /** Responses item indexes remain distinct across interleaved text, reasoning and tools. */
 import type { ResponsesEvent, ResponsesUsage, WireIdentity } from '../api/events.ts'
+import type { ToolNameTable } from './names.ts'
 import { createReplay, outputBlock, outputMatchesBlock, type OutputItem, type ReplayBlock, type ReplayContext, type ReplayEnvelope } from './replay.ts'
 
 export type ToolCallBlock = Extract<ReplayBlock, { type: 'tool-call' }>
@@ -42,9 +43,16 @@ export class BlockTranslator {
   private replayable = true
   private terminal = false
   private readonly context: ReplayContext | undefined
+  private readonly names: ToolNameTable | undefined
 
-  constructor(context?: ReplayContext) {
+  constructor(context?: ReplayContext, names?: ToolNameTable) {
     this.context = context
+    this.names = names
+  }
+
+  /** The recorded tool name a wire name stands for. */
+  private recorded(name: string): string {
+    return this.names === undefined ? name : this.names.raw(name)
   }
 
   private find(identity: WireIdentity, callId?: string): BlockState | undefined {
@@ -223,7 +231,7 @@ export class BlockTranslator {
         if (this.anonymous?.block.type === 'text') this.close(this.anonymous)
         this.anonymous = undefined
         const state = this.find(event, event.callId)
-        if (state === undefined) this.open({ type: 'tool-call', id: event.callId, name: event.name, arguments: '' }, event)
+        if (state === undefined) this.open({ type: 'tool-call', id: event.callId, name: this.recorded(event.name), arguments: '' }, event)
         else this.bind(state, event)
         break
       }

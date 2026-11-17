@@ -26,6 +26,7 @@
 
 import { ApiError, listModels, streamTurn } from './api/client.ts'
 import { BlockTranslator, type AdapterChunk } from './convert/blocks.ts'
+import { toolNames } from './convert/request.ts'
 import type { InputPart, NeutralMessage, NeutralRequest } from './convert/request.ts'
 import { accountScope, replayOutput, sessionCacheKey, type ReplayContext } from './convert/replay.ts'
 import type { ChatGptCredential } from './auth/credential.ts'
@@ -561,11 +562,13 @@ export class ChatGptAdapter {
         async (credential) => {
           assertNotAborted(request.signal)
           const scope = accountScope(this.baseUrl ?? RESOURCE, credential)
-          const translator = new BlockTranslator(scope === undefined ? undefined : { provider: request.provider, model: request.model, scope })
           const neutral = toNeutralRequest(request, scope)
+          const names = toolNames(neutral)
+          const translator = new BlockTranslator(scope === undefined ? undefined : { provider: request.provider, model: request.model, scope }, names)
           const started = streamTurn({
             accessToken: credential.accessToken,
             request: neutral,
+            names,
             endpoints: {
               ...this.baseUrl === undefined ? {} : { baseUrl: this.baseUrl },
               ...this.fetch === undefined ? {} : { fetch: this.fetch },

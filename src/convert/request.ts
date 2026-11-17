@@ -3,6 +3,7 @@
  * results behind later messages breaks conversation semantics and cache reuse.
  */
 import { DIRECT_TOKEN_SCOPE } from '../auth/protocol.ts'
+import { ToolNameTable } from './names.ts'
 import type { OutputItem } from './replay.ts'
 
 export const STORE = false
@@ -85,8 +86,27 @@ function toolOutput(message: NeutralMessage): string | Record<string, unknown>[]
   return output
 }
 
+/**
+ * Every tool name this request can put on the wire, in dispatch priority order:
+ * live definitions first, then the names recorded in the transcript.
+ */
+export function toolNames(request: NeutralRequest): ToolNameTable {
+  const names = new ToolNameTable()
+  for (const tool of request.tools ?? []) names.wire(tool.name)
+  for (const message of request.messages) {
+    if (typeof message.content !== 'string' && Array.isArray(message.content)) {
+      for (const part of message.content) if (part.type === 'tool-call') names.wire(part.name)
+    }
+    for (const item of message.replay ?? []) {
+      const name = item['name']
+      if (item.type === 'function_call' && typeof name === 'string') names.wire(name)
+    }
+  }
+  return names
+}
+
 /** Preserve message and assistant-block order; instruction roles stay in place. */
-export function toResponsesBody(request: NeutralRequest): ResponsesBody {
+export function toResponsesBody(request: NeutralRequest, names: ToolNameTable = toolNames(request)): ResponsesBody {
   const input: InputItem[] = []
   const leadingRole = request.messages[0]?.role
   if (request.system && leadingRole !== 'system' && leadingRole !== 'developer') {
@@ -100,8 +120,10 @@ export function toResponsesBody(request: NeutralRequest): ResponsesBody {
     if (message.role === 'assistant' && message.replay !== undefined) {
       // Stream fragments may omit summary; the Responses input shape requires
       // the array even when reasoning is carried solely by encrypted_content.
-      input.push(...structuredClone(message.replay).map(item => item.type === 'reasoning' && item['summary'] === undefined
-        ? { ...item, summary: [] } : item))
+      input.push(...structuredClone(message.replay).map(item => {
+        if (item.type === 'reasoning' && item['summary'] === undefined) return { ...item, summary: [] }
+        return item.type === 'function_call' && typeof item['name'] === 'string' ? { ...item, name: names.wire(item['name']) } : item
+      }))
       continue
     }
     if (message.role === 'tool') {
@@ -120,7 +142,7 @@ export function toResponsesBody(request: NeutralRequest): ResponsesBody {
       if (part.type === 'tool-call') {
         if (role !== 'assistant') continue
         flush()
-        input.push({ type: 'function_call', call_id: part.id, name: part.name, arguments: part.arguments })
+        input.push({ type: 'function_call', call_id: part.id, name: names.wire(part.name), arguments: part.arguments })
       } else if (part.type === 'text') {
         if (part.text.length > 0) content.push({ type: role === 'assistant' ? 'output_text' : 'input_text', text: part.text })
       } else if (role === 'user') {
@@ -133,7 +155,7 @@ export function toResponsesBody(request: NeutralRequest): ResponsesBody {
     model: request.model, input, stream: STREAM, store: STORE,
     ...request.cacheKey === undefined ? {} : { prompt_cache_key: request.cacheKey },
     ...request.tools?.length ? {
-      tools: request.tools.map(tool => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })),
+      tools: request.tools.map(tool => ({ type: 'function' as const, name: names.wire(tool.name), description: tool.description, parameters: tool.parameters, strict: false })),
     } : {},
     ...request.reasoningEffort === undefined ? {} : {
       reasoning: { effort: request.reasoningEffort, summary: 'concise' }, include: ['reasoning.encrypted_content'],
